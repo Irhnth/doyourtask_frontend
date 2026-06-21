@@ -88,7 +88,7 @@ class _LoginScreenState extends State<LoginScreen> {
                 const SizedBox(height: 24),
                 
                 const Text(
-                  'Quest Login',
+                  'DoYourTask',
                   style: TextStyle(fontSize: 28, fontWeight: FontWeight.w900, color: Color(0xFF2D3748)),
                 ),
                 const SizedBox(height: 8),

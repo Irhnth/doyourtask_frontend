@@ -4,6 +4,7 @@ import '../services/notification_service.dart';
 import 'login_screen.dart';
 import 'package:intl/intl.dart';
 import 'profile_screen.dart'; // Import layar profil baru
+import 'leaderboard_screen.dart';
 
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key});
@@ -238,19 +239,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
       children: [
         Row(
           children: [
-            // BARU: Tambahkan GestureDetector agar avatar bisa diklik
             GestureDetector(
               onTap: () {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(builder: (context) => const ProfileScreen()),
-                ).then((_) => _loadData()); // Refresh data jika kembali dari profil
+                Navigator.push(context, MaterialPageRoute(builder: (context) => const ProfileScreen())).then((_) => _loadData());
               },
               child: Container(
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle, 
-                  border: Border.all(color: const Color(0xFFE4E9F2), width: 2)
-                ),
+                decoration: BoxDecoration(shape: BoxShape.circle, border: Border.all(color: const Color(0xFFE4E9F2), width: 2)),
                 child: CircleAvatar(
                   radius: 24,
                   backgroundColor: Colors.white,
@@ -265,28 +259,35 @@ class _DashboardScreenState extends State<DashboardScreen> {
             Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text(
-                  'Selamat datang,', 
-                  style: TextStyle(fontSize: 13, color: Color(0xFF8F9BB3), fontWeight: FontWeight.w500)
-                ),
-                Text(
-                  _userProfile?['name'] ?? 'Pengguna', 
-                  style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Color(0xFF222B45), letterSpacing: -0.5)
-                ),
+                const Text('Selamat datang,', style: TextStyle(fontSize: 13, color: Color(0xFF8F9BB3), fontWeight: FontWeight.w500)),
+                Text(_userProfile?['name'] ?? 'Pengguna', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Color(0xFF222B45), letterSpacing: -0.5)),
               ],
             ),
           ],
         ),
-        Container(
-          decoration: BoxDecoration(
-            color: Colors.white, 
-            borderRadius: BorderRadius.circular(12), 
-            border: Border.all(color: const Color(0xFFE4E9F2))
-          ),
-          child: IconButton(
-            icon: const Icon(Icons.logout_rounded, color: Color(0xFF8F9BB3), size: 20), 
-            onPressed: _logout
-          ),
+        
+        // MODIFIKASI: Tombol Berjejer (Leaderboard & Logout)
+        Row(
+          children: [
+            Container(
+              decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(12), border: Border.all(color: const Color(0xFFE4E9F2))),
+              child: IconButton(
+                icon: const Icon(Icons.emoji_events_rounded, color: Color(0xFFFFC94D), size: 20), // Ikon Piala Emas
+                tooltip: 'Papan Peringkat',
+                onPressed: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (context) => const LeaderboardScreen()),
+                  );
+                },
+              ),
+            ),
+            const SizedBox(width: 8),
+            Container(
+              decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(12), border: Border.all(color: const Color(0xFFE4E9F2))),
+              child: IconButton(icon: const Icon(Icons.logout_rounded, color: Color(0xFF8F9BB3), size: 20), onPressed: _logout),
+            ),
+          ],
         ),
       ],
     );

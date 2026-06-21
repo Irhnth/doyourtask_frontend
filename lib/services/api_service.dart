@@ -3,8 +3,9 @@ import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
 class ApiService {
-  // Ganti IP ini sesuai dengan IP laptop/WiFi-mu
-  static const String baseUrl = 'http://192.168.100.7:8000/api'; 
+  // Ganti URL ini sesuai dengan Forwarding URL dari Ngrok Anda
+  // Contoh: 'https://1a2b-3c4d-5e.ngrok-free.app/api'
+  static const String baseUrl = 'https://masculine-geriatric-headstone.ngrok-free.dev/api'; 
 
   // ==========================================
   // 1. FUNGSI LOGIN
@@ -14,6 +15,7 @@ class ApiService {
       Uri.parse('$baseUrl/login'),
       headers: {
         'Accept': 'application/json',
+        'ngrok-skip-browser-warning': 'true', // Header Anti-Blokir Ngrok
       },
       body: {
         'email': email.trim(),
@@ -43,6 +45,7 @@ class ApiService {
       Uri.parse('$baseUrl/register'),
       headers: {
         'Accept': 'application/json',
+        'ngrok-skip-browser-warning': 'true', // Header Anti-Blokir Ngrok
       },
       body: {
         'name': name.trim(),
@@ -74,6 +77,7 @@ class ApiService {
       headers: {
         'Authorization': 'Bearer $token',
         'Accept': 'application/json',
+        'ngrok-skip-browser-warning': 'true', // Header Anti-Blokir Ngrok
       },
     );
 
@@ -96,6 +100,7 @@ class ApiService {
       headers: {
         'Authorization': 'Bearer $token',
         'Accept': 'application/json',
+        'ngrok-skip-browser-warning': 'true', // Header Anti-Blokir Ngrok
       },
     );
 
@@ -118,6 +123,7 @@ class ApiService {
       headers: {
         'Authorization': 'Bearer $token',
         'Accept': 'application/json',
+        'ngrok-skip-browser-warning': 'true', // Header Anti-Blokir Ngrok
       },
     );
 
@@ -149,6 +155,7 @@ class ApiService {
       headers: {
         'Authorization': 'Bearer $token',
         'Accept': 'application/json',
+        'ngrok-skip-browser-warning': 'true', // Header Anti-Blokir Ngrok
       },
       body: {
         'title': title,
@@ -163,6 +170,7 @@ class ApiService {
       throw Exception('Gagal menambahkan tugas. Pastikan isian benar.');
     }
   }
+
   // ==========================================
   // 8. FUNGSI EDIT TUGAS (UPDATE)
   // ==========================================
@@ -175,6 +183,7 @@ class ApiService {
       headers: {
         'Authorization': 'Bearer $token',
         'Accept': 'application/json',
+        'ngrok-skip-browser-warning': 'true', // Header Anti-Blokir Ngrok
       },
       body: {
         'title': title,
@@ -209,6 +218,7 @@ class ApiService {
       headers: {
         'Authorization': 'Bearer $token',
         'Accept': 'application/json',
+        'ngrok-skip-browser-warning': 'true', // Header Anti-Blokir Ngrok
       },
     );
 
@@ -219,6 +229,30 @@ class ApiService {
 
     if (response.statusCode != 200 && response.statusCode != 204) {
       throw Exception('Gagal Hapus: Status ${response.statusCode}');
+    }
+  }
+
+  // ==========================================
+  // 10. FUNGSI AMBIL DATA PAPAN PERINGKAT
+  // ==========================================
+  Future<List<dynamic>> getLeaderboard() async {
+    SharedPreferences prefs = await SharedPreferences.getInstance();
+    String? token = prefs.getString('token');
+
+    final response = await http.get(
+      Uri.parse('$baseUrl/leaderboard'),
+      headers: {
+        'Authorization': 'Bearer $token',
+        'Accept': 'application/json',
+      },
+    );
+
+    if (response.statusCode == 200) {
+      final data = json.decode(response.body);
+      // PERBAIKAN: Pastikan selalu mengembalikan List meskipun kosong
+      return data['leaderboard'] ?? []; 
+    } else {
+      throw Exception('Gagal memuat papan peringkat');
     }
   }
 }
