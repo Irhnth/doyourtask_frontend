@@ -3,8 +3,9 @@ import '../services/api_service.dart';
 import '../services/notification_service.dart';
 import 'login_screen.dart';
 import 'package:intl/intl.dart';
-import 'profile_screen.dart'; // Import layar profil baru
+import 'profile_screen.dart'; 
 import 'leaderboard_screen.dart';
+import 'health_screen.dart'; // Import layar kesehatan baru
 
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key});
@@ -21,15 +22,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   // Variabel untuk Kalender
   DateTime _selectedDate = DateTime.now();
-  final int _daysPast = 365; // Bisa scroll 1 tahun ke belakang
-  final int _daysFuture = 365; // Bisa scroll 1 tahun ke depan
+  final int _daysPast = 365; 
+  final int _daysFuture = 365; 
   late ScrollController _calendarScrollController;
 
   @override
   void initState() {
     super.initState();
-    // Lebar item kalender (60) + margin kanan (12) = 72 pixel per hari
-    // Kita set scroll awalnya agar langsung melompat fokus ke "Hari Ini"
     _calendarScrollController = ScrollController(initialScrollOffset: _daysPast * 72.0);
     _loadData();
   }
@@ -40,25 +39,37 @@ class _DashboardScreenState extends State<DashboardScreen> {
     super.dispose();
   }
 
+  // Fungsi load data (tanpa memanggil API kesehatan lagi di sini)
   Future<void> _loadData() async {
-    setState(() => _isLoading = true);
+    setState(() {
+      _isLoading = true;
+    });
+
     try {
-      final profile = await _apiService.getUserProfile();
-      final tasks = await _apiService.getTasks();
-      setState(() {
-        _userProfile = profile;
-        _tasks = tasks;
-      });
+      final results = await Future.wait([
+        _apiService.getUserProfile(),
+        _apiService.getTasks(),
+      ]);
+      
+      if (mounted) {
+        setState(() {
+          _userProfile = results[0] as Map<String, dynamic>?;
+          _tasks = results[1] as List<dynamic>;
+        });
+      }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.toString())));
       }
     } finally {
-      setState(() => _isLoading = false);
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+        });
+      }
     }
   }
 
-  // Helper mengecek kesamaan tanggal
   bool _isSameDay(DateTime date1, DateTime date2) {
     return date1.year == date2.year && date1.month == date2.month && date1.day == date2.day;
   }
@@ -111,7 +122,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
             style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent, foregroundColor: Colors.white, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
             onPressed: () async {
               Navigator.pop(context); 
-              Navigator.pop(context); 
               try {
                 await _apiService.deleteTask(taskId);
                 await NotificationService().cancelNotification(taskId);
@@ -120,7 +130,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Quest dihapus'), backgroundColor: Colors.redAccent));
                 }
               } catch (e) {
-                ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.toString())));
+                if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.toString())));
               }
             },
             child: const Text('Hapus'),
@@ -137,12 +147,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
     }
   }
 
-  // ==========================================
-  // UI BUILDER UTAMA
-  // ==========================================
   @override
   Widget build(BuildContext context) {
-    // Memfilter tugas sesuai dengan tanggal yang dipilih di kalender
     final filteredTasks = _tasks.where((task) {
       if (task['deadline'] == null) return false;
       try {
@@ -173,7 +179,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     _buildCalendarTimeline(),
                     const SizedBox(height: 28),
                     
-                    // Judul Daftar Tugas + Tombol Kalender Penuh
                     Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
@@ -196,7 +201,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
                             if (date != null) {
                               setState(() {
                                 _selectedDate = date;
-                                // Scroll otomatis ke posisi tanggal yang dipilih
                                 final difference = date.difference(DateTime.now().subtract(Duration(days: _daysPast))).inDays;
                                 if(difference >= 0 && difference <= (_daysPast + _daysFuture)) {
                                   _calendarScrollController.animateTo(
@@ -230,9 +234,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  // ==========================================
-  // WIDGET: HEADER
-  // ==========================================
   Widget _buildHeader() {
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -265,24 +266,33 @@ class _DashboardScreenState extends State<DashboardScreen> {
             ),
           ],
         ),
-        
-        // MODIFIKASI: Tombol Berjejer (Leaderboard & Logout)
         Row(
           children: [
+            // TOMBOL: Target Kesehatan
             Container(
               decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(12), border: Border.all(color: const Color(0xFFE4E9F2))),
               child: IconButton(
-                icon: const Icon(Icons.emoji_events_rounded, color: Color(0xFFFFC94D), size: 20), // Ikon Piala Emas
-                tooltip: 'Papan Peringkat',
+                icon: const Icon(Icons.health_and_safety_rounded, color: Color(0xFF00E096), size: 20),
+                tooltip: 'Target Kesehatan',
                 onPressed: () {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(builder: (context) => const LeaderboardScreen()),
-                  );
+                  Navigator.push(context, MaterialPageRoute(builder: (context) => const HealthScreen()));
                 },
               ),
             ),
             const SizedBox(width: 8),
+            // TOMBOL: Leaderboard
+            Container(
+              decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(12), border: Border.all(color: const Color(0xFFE4E9F2))),
+              child: IconButton(
+                icon: const Icon(Icons.emoji_events_rounded, color: Color(0xFFFFC94D), size: 20),
+                tooltip: 'Papan Peringkat',
+                onPressed: () {
+                  Navigator.push(context, MaterialPageRoute(builder: (context) => const LeaderboardScreen()));
+                },
+              ),
+            ),
+            const SizedBox(width: 8),
+            // TOMBOL: Logout
             Container(
               decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(12), border: Border.all(color: const Color(0xFFE4E9F2))),
               child: IconButton(icon: const Icon(Icons.logout_rounded, color: Color(0xFF8F9BB3), size: 20), onPressed: _logout),
@@ -293,9 +303,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  // ==========================================
-  // WIDGET: KARTU GAMIFIKASI
-  // ==========================================
   Widget _buildGamificationCard() {
     return Container(
       width: double.infinity,
@@ -335,9 +342,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  // ==========================================
-  // WIDGET: KALENDER HORISONTAL
-  // ==========================================
   Widget _buildCalendarTimeline() {
     return SizedBox(
       height: 86,
@@ -345,7 +349,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
         controller: _calendarScrollController, 
         scrollDirection: Axis.horizontal,
         physics: const BouncingScrollPhysics(),
-        itemCount: _daysPast + _daysFuture + 1, // Total 731 hari
+        itemCount: _daysPast + _daysFuture + 1,
         itemBuilder: (context, index) {
           final date = DateTime.now().subtract(Duration(days: _daysPast)).add(Duration(days: index));
           final isSelected = _isSameDay(date, _selectedDate);
@@ -383,9 +387,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  // ==========================================
-  // WIDGET: DAFTAR TUGAS
-  // ==========================================
   Widget _buildTaskList(List<dynamic> targetList) {
     return ListView.separated(
       shrinkWrap: true,
@@ -400,7 +401,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
         if (task['deadline'] != null) {
           try {
             final dt = DateTime.parse(task['deadline'].toString());
-            formattedDeadline = DateFormat('HH:mm').format(dt); // Hanya jam karena tanggal ada di kalender
+            formattedDeadline = DateFormat('HH:mm').format(dt); 
           } catch (e) {}
         }
 
@@ -488,9 +489,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  // ==========================================
-  // SEMUA MODAL & DIALOG
-  // ==========================================
   void _showLevelUpDialog(dynamic newLevel) {
     showDialog(
       context: context,
@@ -527,7 +525,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
     String formattedDeadline = task['deadline'] ?? '-';
     try {
       final dt = DateTime.parse(task['deadline'].toString());
-      // Titik di sini sudah diperbaiki
       formattedDeadline = DateFormat('dd MMM yyyy, HH:mm').format(dt); 
     } catch (e) {}
 
@@ -598,7 +595,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   void _buildTaskFormModal({required bool isEdit, Map<String, dynamic>? task}) {
     final titleController = TextEditingController(text: isEdit ? task!['title'] : '');
     final descriptionController = TextEditingController(text: isEdit ? (task!['description'] ?? '') : ''); 
-    DateTime? selectedDate = _selectedDate; // Default ambil tanggal yang lagi diklik di kalender
+    DateTime? selectedDate = _selectedDate; 
     TimeOfDay? selectedTime;
     
     if (isEdit && task!['deadline'] != null) {
@@ -723,7 +720,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                             _loadData(); 
                           }
                         } catch (e) {
-                          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.toString())));
+                          if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.toString())));
                         }
                       },
                       child: Text(isEdit ? 'Simpan Perubahan' : 'Buat Quest Baru', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),

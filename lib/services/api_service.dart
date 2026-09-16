@@ -244,6 +244,7 @@ class ApiService {
       headers: {
         'Authorization': 'Bearer $token',
         'Accept': 'application/json',
+        'ngrok-skip-browser-warning': 'true', // Menambahkan header ngrok agar aman
       },
     );
 
@@ -253,6 +254,95 @@ class ApiService {
       return data['leaderboard'] ?? []; 
     } else {
       throw Exception('Gagal memuat papan peringkat');
+    }
+  }
+
+  // ==========================================
+  // 11. FUNGSI AMBIL PROGRES KESEHATAN HARI INI
+  // ==========================================
+  Future<List<dynamic>> getTodayHealthProgress() async {
+    SharedPreferences prefs = await SharedPreferences.getInstance();
+    String? token = prefs.getString('token');
+
+    final response = await http.get(
+      Uri.parse('$baseUrl/health/today'),
+      headers: {
+        'Authorization': 'Bearer $token',
+        'Accept': 'application/json',
+        'ngrok-skip-browser-warning': 'true',
+      },
+    );
+
+    if (response.statusCode == 200) {
+      final decodedData = json.decode(response.body);
+      return decodedData['data'] ?? [];
+    } else {
+      throw Exception('Gagal memuat target kesehatan');
+    }
+  }
+
+  // ==========================================
+  // 12. FUNGSI UPDATE PROGRES KESEHATAN
+  // ==========================================
+  Future<Map<String, dynamic>> updateHealthProgress(int targetId, int incrementValue) async {
+    SharedPreferences prefs = await SharedPreferences.getInstance();
+    String? token = prefs.getString('token');
+
+    final response = await http.put(
+      Uri.parse('$baseUrl/health/target/$targetId/progress'),
+      headers: {
+        'Authorization': 'Bearer $token',
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+        'ngrok-skip-browser-warning': 'true',
+      },
+      body: json.encode({
+        'increment_value': incrementValue,
+      }),
+    );
+
+    // --- TAMBAHAN UNTUK DEBUGGING ---
+    print('--- DEBUG UPDATE PROGRESS ---');
+    print('Status Code: ${response.statusCode}');
+    print('Response Body: ${response.body}');
+    // --------------------------------
+
+    if (response.statusCode == 200) {
+      return json.decode(response.body);
+    } else {
+      // Tangkap pesan asli dari Laravel dan tampilkan ke layar
+      try {
+        final errorData = json.decode(response.body);
+        throw Exception(errorData['message'] ?? 'Error Server: ${response.statusCode}');
+      } catch (e) {
+        throw Exception('Error Server: ${response.statusCode} - ${response.body}');
+      }
+    }
+  }
+  // ==========================================
+  // 13. FUNGSI EDIT TARGET KESEHATAN
+  // ==========================================
+  Future<void> editHealthTarget(int targetId, String title, int targetValue, String unit) async {
+    SharedPreferences prefs = await SharedPreferences.getInstance();
+    String? token = prefs.getString('token');
+
+    final response = await http.put(
+      Uri.parse('$baseUrl/health/target/$targetId'),
+      headers: {
+        'Authorization': 'Bearer $token',
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+        'ngrok-skip-browser-warning': 'true',
+      },
+      body: json.encode({
+        'title': title,
+        'target_value': targetValue,
+        'unit': unit,
+      }),
+    );
+
+    if (response.statusCode != 200) {
+      throw Exception('Gagal mengubah target kesehatan');
     }
   }
 }
