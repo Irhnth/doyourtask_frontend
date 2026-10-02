@@ -319,6 +319,39 @@ class ApiService {
       }
     }
   }
+
+  // ==========================================
+  // 12B. FUNGSI UPDATE PROGRES LANGKAH (STEP COUNTER DENGAN MILESTONE XP)
+  // ==========================================
+  Future<Map<String, dynamic>> updateStepProgress(int targetId, int currentSteps) async {
+    SharedPreferences prefs = await SharedPreferences.getInstance();
+    String? token = prefs.getString('token');
+
+    final response = await http.put(
+      Uri.parse('$baseUrl/health/target/$targetId/steps'),
+      headers: {
+        'Authorization': 'Bearer $token',
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+        'ngrok-skip-browser-warning': 'true',
+      },
+      body: json.encode({
+        'current_steps': currentSteps,
+      }),
+    );
+
+    if (response.statusCode == 200) {
+      return json.decode(response.body);
+    } else {
+      try {
+        final errorData = json.decode(response.body);
+        throw Exception(errorData['message'] ?? 'Error Server: ${response.statusCode}');
+      } catch (e) {
+        throw Exception('Error Server: ${response.statusCode} - ${response.body}');
+      }
+    }
+  }
+
   // ==========================================
   // 13. FUNGSI EDIT TARGET KESEHATAN
   // ==========================================

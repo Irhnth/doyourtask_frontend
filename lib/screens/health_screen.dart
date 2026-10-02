@@ -1,8 +1,12 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:intl/intl.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../services/api_service.dart';
 import '../services/notification_service.dart';
+import '../services/step_counter_service.dart';
 import 'pomodoro_screen.dart';
+import 'step_tracker_screen.dart';
 
 enum HealthFilter { all, ongoing, completed }
 
@@ -30,6 +34,7 @@ class HealthScreen extends StatefulWidget {
 class _HealthScreenState extends State<HealthScreen> {
   final ApiService _apiService = ApiService();
   final NotificationService _notificationService = NotificationService();
+  final StepCounterService _stepService = StepCounterService();
 
   List<dynamic> _healthTargets = [];
   bool _isLoading = true;
@@ -40,11 +45,145 @@ class _HealthScreenState extends State<HealthScreen> {
   int _reminderInterval = 6;
   int _reminderStartHour = 6;
 
+  // --- STEP COUNTER LIVE STATE ---
+  StreamSubscription<int>? _stepSubscription;
+  Timer? _stepSyncTimer;
+  int _liveSensorSteps = 0;
+  int _lastSyncedSteps = -1;
+
   @override
   void initState() {
     super.initState();
     _loadHealthData();
     _loadReminderSettings();
+    _initStepCounter();
+  }
+
+  @override
+  void dispose() {
+    _stepSubscription?.cancel();
+    _stepSyncTimer?.cancel();
+    super.dispose();
+  }
+
+  // --- STEP COUNTER INITIALIZATION ---
+  void _initStepCounter() {
+    _stepService.init();
+    _liveSensorSteps = _stepService.todaySteps;
+
+    _stepSubscription = _stepService.stepStream.listen((steps) {
+      if (mounted) {
+        setState(() {
+          _liveSensorSteps = steps;
+        });
+        if (steps > _lastSyncedSteps) {
+          _debounceSyncSteps(steps);
+        }
+      }
+    });
+  }
+
+  void _debounceSyncSteps(int steps) {
+    if (_healthTargets.isEmpty) return;
+    if (steps <= _lastSyncedSteps) return;
+
+    final stepTarget = _healthTargets.firstWhere(
+      (t) => _isStepTarget(t),
+      orElse: () => null,
+    );
+
+    if (stepTarget == null) return;
+
+    // Debounce sync 5 detik agar hemat baterai dan tidak membebani server
+    _stepSyncTimer?.cancel();
+    _stepSyncTimer = Timer(const Duration(seconds: 5), () async {
+      if (!mounted) return;
+      try {
+        final targetId = stepTarget['target_id'] ?? stepTarget['id'];
+        final result = await _apiService.updateStepProgress(targetId, steps);
+        _lastSyncedSteps = steps;
+
+        // Perbarui data target langkah secara lokal tanpa memuat ulang seluruh halaman
+        if (result['status'] == 'success' && result['data'] != null) {
+          final data = result['data'];
+          if (mounted) {
+            setState(() {
+              stepTarget['current_value'] = steps;
+              if (data['total_xp'] != null) {
+                stepTarget['total_xp'] = data['total_xp'];
+              }
+              if (data['is_completed'] != null) {
+                stepTarget['is_completed'] = data['is_completed'];
+              }
+              if (data['last_milestone'] != null) {
+                stepTarget['last_milestone'] = data['last_milestone'];
+              }
+            });
+          }
+        }
+
+        // Jika ada milestone baru tercapai & mendapat reward XP
+        if (result['milestone_reached'] == true && (result['earned_xp'] ?? 0) > 0) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Row(
+                  children: [
+                    const Icon(Icons.bolt_rounded, color: Color(0xFFFFC94D), size: 20),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'Milestone ${result['milestone']}% Tercapai! +${result['earned_xp']} XP',
+                        style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.white),
+                      ),
+                    ),
+                  ],
+                ),
+                backgroundColor: const Color(0xFF1E293B),
+                behavior: SnackBarBehavior.floating,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                duration: const Duration(seconds: 3),
+              ),
+            );
+          }
+        }
+
+        // Jika target mencapai 100% dan baru pertama kali selesai
+        if (result['is_completed'] == true && stepTarget['is_completed'] != true) {
+          if (mounted) {
+            _showTargetCompletedDialog(
+              title: stepTarget['title'] ?? 'Langkah Harian',
+              earnedXp: result['earned_xp'],
+            );
+          }
+        }
+
+        if (result['is_level_up'] == true && result['new_level'] != null) {
+          if (mounted) {
+            _showLevelUpDialog(result['new_level']);
+          }
+        }
+      } catch (_) {
+        // Mode offline: langkah tetap terhitung di UI lokal
+      }
+    });
+  }
+
+  bool _isStepTarget(dynamic target) {
+    if (target is! Map) return false;
+    final unit = (target['unit'] ?? '').toString().toLowerCase();
+    final title = (target['title'] ?? '').toString().toLowerCase();
+    final type = (target['type'] ?? '').toString().toLowerCase();
+    return unit == 'langkah' || title.contains('langkah') || type == 'step';
+  }
+
+  Map<String, dynamic>? get _stepTarget {
+    for (var t in _healthTargets) {
+      if (t is Map && _isStepTarget(t)) {
+        return Map<String, dynamic>.from(t);
+      }
+    }
+    return null;
   }
 
   // --- STATS COMPUTATIONS ---
@@ -54,14 +193,15 @@ class _HealthScreenState extends State<HealthScreen> {
   double get _overallProgress =>
       _totalCount == 0 ? 0.0 : (_completedCount / _totalCount);
 
-  List<dynamic> get _filteredTargets {
+  List<dynamic> get _regularFilteredTargets {
+    final regular = _healthTargets.where((t) => !_isStepTarget(t)).toList();
     switch (_currentFilter) {
       case HealthFilter.ongoing:
-        return _healthTargets.where((t) => t['is_completed'] != true).toList();
+        return regular.where((t) => t['is_completed'] != true).toList();
       case HealthFilter.completed:
-        return _healthTargets.where((t) => t['is_completed'] == true).toList();
+        return regular.where((t) => t['is_completed'] == true).toList();
       case HealthFilter.all:
-        return _healthTargets;
+        return regular;
     }
   }
 
@@ -158,6 +298,15 @@ class _HealthScreenState extends State<HealthScreen> {
     final lowerTitle = title.toLowerCase();
     final lowerType = type?.toLowerCase() ?? '';
 
+    if (lowerTitle.contains('langkah') || lowerType == 'step') {
+      return const _HealthCategoryTheme(
+        icon: Icons.directions_walk_rounded,
+        primaryColor: Color(0xFF00B4D8),
+        backgroundColor: Color(0xFFE0F7FA),
+        accentColor: Color(0xFF0077B6),
+      );
+    }
+
     if (lowerType == 'exercise' ||
         lowerTitle.contains('olahraga') ||
         lowerTitle.contains('lari') ||
@@ -233,6 +382,80 @@ class _HealthScreenState extends State<HealthScreen> {
       primaryColor: Color(0xFF3366FF),
       backgroundColor: Color(0xFFEEF2FF),
       accentColor: Color(0xFF5B8DEF),
+    );
+  }
+
+  void _showLevelUpDialog(dynamic newLevel) {
+    showDialog(
+      context: context,
+      builder: (dialogContext) => Dialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(28)),
+        child: Container(
+          padding: const EdgeInsets.all(32),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(28),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 90,
+                height: 90,
+                decoration: BoxDecoration(
+                  color: const Color(0xFFFFC94D).withValues(alpha: 0.18),
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(
+                  Icons.military_tech_rounded,
+                  size: 56,
+                  color: Color(0xFFFFC94D),
+                ),
+              ),
+              const SizedBox(height: 20),
+              const Text(
+                'LEVEL UP!',
+                style: TextStyle(
+                  fontSize: 24,
+                  fontWeight: FontWeight.w900,
+                  color: Color(0xFF222B45),
+                  letterSpacing: 0.5,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                'Keren! Kamu mencapai Level $newLevel',
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  fontSize: 15,
+                  color: Color(0xFF8F9BB3),
+                  height: 1.4,
+                ),
+              ),
+              const SizedBox(height: 28),
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF3366FF),
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(vertical: 16),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(16),
+                    ),
+                    elevation: 0,
+                  ),
+                  onPressed: () => Navigator.pop(dialogContext),
+                  child: const Text(
+                    'Lanjut Berpetualang',
+                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+                  ),
+                ),
+              )
+            ],
+          ),
+        ),
+      ),
     );
   }
 
@@ -314,10 +537,12 @@ class _HealthScreenState extends State<HealthScreen> {
     );
   }
 
-  Future<void> _loadHealthData() async {
-    setState(() {
-      _isLoading = true;
-    });
+  Future<void> _loadHealthData({bool showLoading = true}) async {
+    if (showLoading && _healthTargets.isEmpty) {
+      setState(() {
+        _isLoading = true;
+      });
+    }
 
     try {
       final healthData = await _apiService.getTodayHealthProgress();
@@ -327,7 +552,7 @@ class _HealthScreenState extends State<HealthScreen> {
         });
       }
     } catch (e) {
-      if (mounted) {
+      if (mounted && _healthTargets.isEmpty) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(e.toString()),
@@ -351,7 +576,6 @@ class _HealthScreenState extends State<HealthScreen> {
     final int targetValue = target['target_value'] ?? 1;
     final String title = target['title'] ?? 'Kesehatan';
 
-    // Cek apakah dengan penambahan ini target akan selesai
     final bool willComplete = (currentValue + 1) >= targetValue;
 
     try {
@@ -363,7 +587,6 @@ class _HealthScreenState extends State<HealthScreen> {
               result['target']['is_completed'] == true) ||
           earnedXp > 0;
 
-      // HANYA munculkan notifikasi/dialog jika target SUDAH terselesaikan!
       if (willComplete || isCompletedByApi) {
         if (mounted) {
           _showTargetCompletedDialog(
@@ -452,7 +675,6 @@ class _HealthScreenState extends State<HealthScreen> {
                     ),
                     const SizedBox(height: 20),
 
-                    // Header
                     Row(
                       children: [
                         Container(
@@ -494,7 +716,6 @@ class _HealthScreenState extends State<HealthScreen> {
                     ),
                     const SizedBox(height: 20),
 
-                    // Switch Aktifkan Pengingat
                     Container(
                       padding: const EdgeInsets.symmetric(
                           horizontal: 16, vertical: 12),
@@ -562,8 +783,6 @@ class _HealthScreenState extends State<HealthScreen> {
 
                     if (tempEnabled) ...[
                       const SizedBox(height: 20),
-
-                      // Pilihan Interval
                       const Text(
                         'Frekuensi Pengingat',
                         style: TextStyle(
@@ -614,8 +833,6 @@ class _HealthScreenState extends State<HealthScreen> {
                       ),
 
                       const SizedBox(height: 18),
-
-                      // Pilihan Jam Mulai
                       const Text(
                         'Dimulai Pukul',
                         style: TextStyle(
@@ -666,8 +883,6 @@ class _HealthScreenState extends State<HealthScreen> {
                       ),
 
                       const SizedBox(height: 20),
-
-                      // Pratinjau Jadwal Harian
                       Container(
                         width: double.infinity,
                         padding: const EdgeInsets.all(16),
@@ -739,8 +954,6 @@ class _HealthScreenState extends State<HealthScreen> {
                       ),
 
                       const SizedBox(height: 16),
-
-                      // Tombol Tes Notifikasi
                       SizedBox(
                         width: double.infinity,
                         child: OutlinedButton.icon(
@@ -788,8 +1001,6 @@ class _HealthScreenState extends State<HealthScreen> {
                     ],
 
                     const SizedBox(height: 24),
-
-                    // Tombol Simpan Pengaturan
                     SizedBox(
                       width: double.infinity,
                       child: ElevatedButton(
@@ -881,7 +1092,7 @@ class _HealthScreenState extends State<HealthScreen> {
     final valueController =
         TextEditingController(text: target['target_value'].toString());
     final unitController = TextEditingController(text: target['unit'] ?? '');
-    final quickUnits = ['Gelas', 'Menit', 'Langkah', 'Jam', 'Porsi', 'Kali'];
+    final quickUnits = ['Gelas', 'Menit', 'Porsi'];
 
     showModalBottomSheet(
       context: context,
@@ -1219,7 +1430,6 @@ class _HealthScreenState extends State<HealthScreen> {
         ),
         centerTitle: true,
         actions: [
-          // TOMBOL PENGATURAN PENGINGAT (NOTIFIKASI)
           IconButton(
             icon: Icon(
               _isReminderEnabled
@@ -1258,6 +1468,8 @@ class _HealthScreenState extends State<HealthScreen> {
   }
 
   Widget _buildContentScrollView() {
+    final stepTarget = _stepTarget;
+
     return CustomScrollView(
       physics: const AlwaysScrollableScrollPhysics(),
       slivers: [
@@ -1266,18 +1478,24 @@ class _HealthScreenState extends State<HealthScreen> {
           child: _buildHeroBanner(),
         ),
 
-        // 2. FILTER TABS
+        // 2. FEATURED STEP TRACKER STANDALONE CARD
+        if (stepTarget != null)
+          SliverToBoxAdapter(
+            child: _buildFeaturedStepTrackerCard(stepTarget),
+          ),
+
+        // 3. FILTER TABS
         SliverToBoxAdapter(
           child: _buildFilterChips(),
         ),
 
-        // 3. SECTION HEADER
+        // 4. SECTION HEADER
         SliverToBoxAdapter(
           child: _buildSectionHeader(),
         ),
 
-        // 4. GRID OR FILTER EMPTY STATE
-        if (_filteredTargets.isEmpty)
+        // 5. GRID OR FILTER EMPTY STATE
+        if (_regularFilteredTargets.isEmpty)
           SliverToBoxAdapter(
             child: _buildEmptyFilterState(),
           )
@@ -1289,21 +1507,27 @@ class _HealthScreenState extends State<HealthScreen> {
                 crossAxisCount: 2,
                 crossAxisSpacing: 14,
                 mainAxisSpacing: 14,
-                childAspectRatio: 0.67,
+                childAspectRatio: 0.82,
               ),
               delegate: SliverChildBuilderDelegate(
                 (context, index) {
-                  var target = _filteredTargets[index];
-                  int currentValue = target['current_value'] ?? 0;
+                  var target = _regularFilteredTargets[index];
+
                   int targetValue = target['target_value'] ?? 1;
+                  int currentValue = target['current_value'] ?? 0;
+
                   double progress =
                       targetValue > 0 ? (currentValue / targetValue) : 0.0;
                   if (progress > 1.0) progress = 1.0;
 
                   return _buildHealthCard(
-                      target, progress, currentValue, targetValue);
+                    target,
+                    progress,
+                    currentValue,
+                    targetValue,
+                  );
                 },
-                childCount: _filteredTargets.length,
+                childCount: _regularFilteredTargets.length,
               ),
             ),
           ),
@@ -1365,7 +1589,6 @@ class _HealthScreenState extends State<HealthScreen> {
           Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // Top row: Mission tag & current date
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
@@ -1406,7 +1629,6 @@ class _HealthScreenState extends State<HealthScreen> {
                 ],
               ),
               const SizedBox(height: 18),
-              // Gauge and stats
               Row(
                 children: [
                   Stack(
@@ -1486,7 +1708,6 @@ class _HealthScreenState extends State<HealthScreen> {
                 ],
               ),
 
-              // Chip Status Pengingat
               GestureDetector(
                 onTap: _showReminderSettingsModal,
                 child: Container(
@@ -1574,23 +1795,28 @@ class _HealthScreenState extends State<HealthScreen> {
 
   // --- FILTER TABS ---
   Widget _buildFilterChips() {
+    final regular = _healthTargets.where((t) => !_isStepTarget(t)).toList();
+    final total = regular.length;
+    final completed = regular.where((t) => t['is_completed'] == true).length;
+    final ongoing = total - completed;
+
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
       child: Row(
         children: [
           _buildFilterOption(
             HealthFilter.all,
-            'Semua ($_totalCount)',
+            'Semua ($total)',
           ),
           const SizedBox(width: 8),
           _buildFilterOption(
             HealthFilter.ongoing,
-            'Berjalan (${_totalCount - _completedCount})',
+            'Berjalan ($ongoing)',
           ),
           const SizedBox(width: 8),
           _buildFilterOption(
             HealthFilter.completed,
-            'Selesai ($_completedCount)',
+            'Selesai ($completed)',
           ),
         ],
       ),
@@ -1653,12 +1879,12 @@ class _HealthScreenState extends State<HealthScreen> {
   // --- SECTION HEADER ---
   Widget _buildSectionHeader() {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(20, 0, 20, 12),
+      padding: const EdgeInsets.fromLTRB(20, 4, 20, 12),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
           const Text(
-            'Target Kamu',
+            'Target Harian Kamu',
             style: TextStyle(
               fontSize: 16,
               fontWeight: FontWeight.w800,
@@ -1667,7 +1893,7 @@ class _HealthScreenState extends State<HealthScreen> {
             ),
           ),
           Text(
-            '${_filteredTargets.length} item',
+            '${_regularFilteredTargets.length} item',
             style: const TextStyle(
               fontSize: 12,
               color: Color(0xFF8F9BB3),
@@ -1679,7 +1905,385 @@ class _HealthScreenState extends State<HealthScreen> {
     );
   }
 
-  // --- HEALTH CARD ---
+  // --- FEATURED STANDALONE STEP TRACKER CARD ---
+  Widget _buildFeaturedStepTrackerCard(Map<String, dynamic> target) {
+    int targetValue = target['target_value'] ?? 6000;
+    int currentValue = target['current_value'] ?? 0;
+    if (_liveSensorSteps > 0 && _liveSensorSteps > currentValue) {
+      currentValue = _liveSensorSteps;
+    }
+    double progress =
+        targetValue > 0 ? (currentValue / targetValue).clamp(0.0, 1.0) : 0.0;
+    int progressPct = (progress * 100).toInt();
+    bool isCompleted = target['is_completed'] ?? (currentValue >= targetValue);
+    int totalXp = target['total_xp'] ?? (isCompleted ? 50 : 0);
+
+    // Hitung milestone selanjutnya
+    int nextMilestone = 100;
+    int nextMilestoneXp = 20;
+    if (progressPct < 20) {
+      nextMilestone = 20;
+      nextMilestoneXp = 5;
+    } else if (progressPct < 40) {
+      nextMilestone = 40;
+      nextMilestoneXp = 5;
+    } else if (progressPct < 60) {
+      nextMilestone = 60;
+      nextMilestoneXp = 10;
+    } else if (progressPct < 80) {
+      nextMilestone = 80;
+      nextMilestoneXp = 10;
+    } else {
+      nextMilestone = 100;
+      nextMilestoneXp = 20;
+    }
+    final int nextMilestoneSteps = ((nextMilestone / 100) * targetValue).round();
+
+    // Estimasi metrik
+    final double distanceKm = currentValue * 0.00075;
+    final double caloriesKcal = currentValue * 0.04;
+
+    return Container(
+      margin: const EdgeInsets.fromLTRB(20, 16, 20, 0),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(24),
+        border: Border.all(
+          color: isCompleted
+              ? const Color(0xFF00E096).withValues(alpha: 0.35)
+              : const Color(0xFFEDF1F7),
+          width: 1.5,
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: const Color(0xFF0077B6).withValues(alpha: 0.08),
+            blurRadius: 18,
+            offset: const Offset(0, 6),
+          ),
+        ],
+      ),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(24),
+          onTap: () async {
+            final updated = await Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (context) => StepTrackerScreen(target: target),
+              ),
+            );
+            if (updated == true || mounted) {
+              _loadHealthData();
+            }
+          },
+          child: Padding(
+            padding: const EdgeInsets.all(18),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // Header Baris: Icon, Judul, Sensor Badge, Arrow
+                Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(9),
+                      decoration: BoxDecoration(
+                        gradient: const LinearGradient(
+                          colors: [Color(0xFF00B4D8), Color(0xFF0077B6)],
+                          begin: Alignment.topLeft,
+                          end: Alignment.bottomRight,
+                        ),
+                        borderRadius: BorderRadius.circular(14),
+                      ),
+                      child: const Icon(
+                        Icons.directions_walk_rounded,
+                        color: Colors.white,
+                        size: 20,
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              const Text(
+                                'Pelacakan Langkah',
+                                style: TextStyle(
+                                  fontSize: 15,
+                                  fontWeight: FontWeight.w800,
+                                  color: Color(0xFF222B45),
+                                  letterSpacing: -0.2,
+                                ),
+                              ),
+                              const SizedBox(width: 6),
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 6, vertical: 2),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFFE0F7FA),
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Container(
+                                      width: 5,
+                                      height: 5,
+                                      decoration: const BoxDecoration(
+                                        color: Color(0xFF00B4D8),
+                                        shape: BoxShape.circle,
+                                      ),
+                                    ),
+                                    const SizedBox(width: 4),
+                                    const Text(
+                                      'Live',
+                                      style: TextStyle(
+                                        fontSize: 9,
+                                        fontWeight: FontWeight.bold,
+                                        color: Color(0xFF0077B6),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            isCompleted
+                                ? 'Target harian 100% selesai!'
+                                : 'Next: Milestone $nextMilestone% (${NumberFormat('#,###', 'id_ID').format(nextMilestoneSteps)} langkah → +$nextMilestoneXp XP)',
+                            style: TextStyle(
+                              fontSize: 11,
+                              color: isCompleted
+                                  ? const Color(0xFF00B377)
+                                  : const Color(0xFF8F9BB3),
+                              fontWeight: FontWeight.w500,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ],
+                      ),
+                    ),
+                    Container(
+                      padding: const EdgeInsets.all(6),
+                      decoration: const BoxDecoration(
+                        color: Color(0xFFF7F9FC),
+                        shape: BoxShape.circle,
+                      ),
+                      child: const Icon(
+                        Icons.arrow_forward_ios_rounded,
+                        size: 13,
+                        color: Color(0xFF8F9BB3),
+                      ),
+                    ),
+                  ],
+                ),
+
+                const SizedBox(height: 16),
+
+                // Main Stats Counter & XP Badge
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.baseline,
+                      textBaseline: TextBaseline.alphabetic,
+                      children: [
+                        Text(
+                          NumberFormat('#,###', 'id_ID').format(currentValue),
+                          style: const TextStyle(
+                            fontSize: 24,
+                            fontWeight: FontWeight.w900,
+                            color: Color(0xFF222B45),
+                            letterSpacing: -0.5,
+                          ),
+                        ),
+                        const SizedBox(width: 4),
+                        Text(
+                          '/ ${NumberFormat('#,###', 'id_ID').format(targetValue)} langkah',
+                          style: const TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                            color: Color(0xFF8F9BB3),
+                          ),
+                        ),
+                      ],
+                    ),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 10, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFFFF8E1),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: const Color(0xFFFFE082)),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const Icon(Icons.military_tech_rounded,
+                              size: 14, color: Color(0xFFFFB300)),
+                          const SizedBox(width: 4),
+                          Text(
+                            '$totalXp / 50 XP',
+                            style: const TextStyle(
+                              fontSize: 11,
+                              fontWeight: FontWeight.w800,
+                              color: Color(0xFFB78103),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+
+                const SizedBox(height: 10),
+
+                // Linear Progress Indicator
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(8),
+                  child: SizedBox(
+                    height: 8,
+                    child: LinearProgressIndicator(
+                      value: progress,
+                      backgroundColor: const Color(0xFFEDF1F7),
+                      valueColor: AlwaysStoppedAnimation<Color>(
+                        isCompleted
+                            ? const Color(0xFF00E096)
+                            : const Color(0xFF00B4D8),
+                      ),
+                    ),
+                  ),
+                ),
+
+                const SizedBox(height: 12),
+
+                // 5 Milestone Dots Track
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [20, 40, 60, 80, 100].map((m) {
+                    final bool isReached = progressPct >= m;
+                    final int xp = (m == 20 || m == 40)
+                        ? 5
+                        : (m == 60 || m == 80)
+                            ? 10
+                            : 20;
+
+                    return Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 6, vertical: 3),
+                      decoration: BoxDecoration(
+                        color: isReached
+                            ? const Color(0xFFE5F9F1)
+                            : const Color(0xFFF7F9FC),
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(
+                          color: isReached
+                              ? const Color(0xFF00E096).withValues(alpha: 0.4)
+                              : const Color(0xFFEDF1F7),
+                        ),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            isReached
+                                ? Icons.check_circle_rounded
+                                : Icons.circle_outlined,
+                            size: 10,
+                            color: isReached
+                                ? const Color(0xFF00B377)
+                                : const Color(0xFF8F9BB3),
+                          ),
+                          const SizedBox(width: 3),
+                          Text(
+                            '$m% (+$xp)',
+                            style: TextStyle(
+                              fontSize: 9,
+                              fontWeight:
+                                  isReached ? FontWeight.bold : FontWeight.w500,
+                              color: isReached
+                                  ? const Color(0xFF00754A)
+                                  : const Color(0xFF8F9BB3),
+                            ),
+                          ),
+                        ],
+                      ),
+                    );
+                  }).toList(),
+                ),
+
+                const SizedBox(height: 12),
+
+                // Bottom Row: Quick Stats & "Detail" action
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Row(
+                      children: [
+                        _buildMiniQuickStat(
+                          Icons.place_rounded,
+                          '${distanceKm.toStringAsFixed(2)} km',
+                          const Color(0xFF00B4D8),
+                        ),
+                        const SizedBox(width: 12),
+                        _buildMiniQuickStat(
+                          Icons.local_fire_department_rounded,
+                          '${caloriesKcal.toStringAsFixed(0)} kkal',
+                          const Color(0xFFFF5252),
+                        ),
+                      ],
+                    ),
+                    const Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          'Buka Detail',
+                          style: TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.bold,
+                            color: Color(0xFF0077B6),
+                          ),
+                        ),
+                        SizedBox(width: 3),
+                        Icon(Icons.chevron_right_rounded,
+                            size: 16, color: Color(0xFF0077B6)),
+                      ],
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildMiniQuickStat(IconData icon, String label, Color color) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(icon, size: 12, color: color),
+        const SizedBox(width: 3),
+        Text(
+          label,
+          style: const TextStyle(
+            fontSize: 11,
+            fontWeight: FontWeight.w600,
+            color: Color(0xFF222B45),
+          ),
+        ),
+      ],
+    );
+  }
+
+  // --- HEALTH CARD (REGULAR TARGETS) ---
   Widget _buildHealthCard(
     Map<String, dynamic> target,
     double progress,
@@ -1715,6 +2319,7 @@ class _HealthScreenState extends State<HealthScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          // Header Baris 1: Ikon Kategori & Edit Target
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
@@ -1775,9 +2380,9 @@ class _HealthScreenState extends State<HealthScreen> {
               ),
             ],
           ),
-          const SizedBox(height: 10),
+          const SizedBox(height: 8),
 
-          // Title
+          // Judul Target
           Text(
             target['title'] ?? 'Target',
             style: const TextStyle(
@@ -1785,7 +2390,7 @@ class _HealthScreenState extends State<HealthScreen> {
               fontWeight: FontWeight.w700,
               color: Color(0xFF222B45),
               letterSpacing: -0.2,
-              height: 1.25,
+              height: 1.2,
             ),
             maxLines: 2,
             overflow: TextOverflow.ellipsis,
@@ -1793,7 +2398,7 @@ class _HealthScreenState extends State<HealthScreen> {
 
           const Spacer(),
 
-          // Progress text & percentage badge
+          // Counter Angka & Badge Persentase
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             crossAxisAlignment: CrossAxisAlignment.end,
@@ -1805,7 +2410,7 @@ class _HealthScreenState extends State<HealthScreen> {
                     Text(
                       '$currentValue/$targetValue',
                       style: const TextStyle(
-                        fontSize: 15,
+                        fontSize: 14,
                         fontWeight: FontWeight.w800,
                         color: Color(0xFF222B45),
                         letterSpacing: -0.3,
@@ -1847,7 +2452,7 @@ class _HealthScreenState extends State<HealthScreen> {
               ),
             ],
           ),
-          const SizedBox(height: 8),
+          const SizedBox(height: 6),
 
           // Linear Progress Bar
           ClipRRect(
@@ -1865,9 +2470,9 @@ class _HealthScreenState extends State<HealthScreen> {
               ),
             ),
           ),
-          const SizedBox(height: 12),
+          const SizedBox(height: 8),
 
-          // Action Button
+          // Tombol Aksi Biasa
           SizedBox(
             width: double.infinity,
             child: isCompleted
