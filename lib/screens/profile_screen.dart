@@ -104,6 +104,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
   List<dynamic> _tasks = [];
   List<dynamic> _healthTargets = [];
   List<dynamic> _leaderboard = [];
+  Map<String, dynamic>? _serverProcrastinationData;
 
   bool _isLoading = true;
   int _selectedDaysRange = 30; // Default menampilkan hingga 30 hari
@@ -144,6 +145,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
         _apiService.getTasks().catchError((_) => <dynamic>[]),
         _apiService.getTodayHealthProgress().catchError((_) => <dynamic>[]),
         _apiService.getLeaderboard().catchError((_) => <dynamic>[]),
+        _apiService.getProcrastinationAnalysis().catchError((_) => <String, dynamic>{}),
       ]);
 
       if (mounted) {
@@ -152,6 +154,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
           _tasks = results[1] as List<dynamic>;
           _healthTargets = results[2] as List<dynamic>;
           _leaderboard = results[3] as List<dynamic>;
+          _serverProcrastinationData = results[4] as Map<String, dynamic>?;
           _selectedChartDayIndex = _selectedDaysRange - 1;
           _isLoading = false;
         });
@@ -194,6 +197,55 @@ class _ProfileScreenState extends State<ProfileScreen> {
   // PERHITUNGAN ANALISIS PERILAKU PENUNDAAN
   // ==========================================
   _ProcrastinationAnalysis _computeProcrastinationStats() {
+    // 1. Prioritaskan hasil perhitungan resmi dari backend server
+    if (_serverProcrastinationData != null &&
+        _serverProcrastinationData!['status'] == 'success' &&
+        _serverProcrastinationData!['data'] != null) {
+      final d = _serverProcrastinationData!['data'] as Map<String, dynamic>;
+      final score = (d['score'] ?? 0) as int;
+      final overduePending = (d['overdue_pending_count'] ?? 0) as int;
+      final lastMinute = (d['last_minute_count'] ?? 0) as int;
+      final onTime = (d['on_time_count'] ?? 0) as int;
+      final lateCompleted = (d['late_completed_count'] ?? 0) as int;
+      final total = (d['total_evaluated'] ?? 0) as int;
+
+      IconData archetypeIcon;
+      if (total == 0) {
+        archetypeIcon = Icons.hourglass_empty_rounded;
+      } else if (score >= 80 && overduePending == 0) {
+        archetypeIcon = Icons.verified_user_rounded;
+      } else if (score >= 50 || (lastMinute > onTime && overduePending <= 1)) {
+        archetypeIcon = Icons.bolt_rounded;
+      } else {
+        archetypeIcon = Icons.warning_amber_rounded;
+      }
+
+      Color color;
+      final hexColor = d['archetype_color']?.toString() ?? '#8F9BB3';
+      try {
+        color = Color(int.parse(hexColor.replaceAll('#', '0xFF')));
+      } catch (_) {
+        color = const Color(0xFF8F9BB3);
+      }
+
+      final tipsList = (d['tips'] as List<dynamic>?)?.map((e) => e.toString()).toList() ?? <String>[];
+
+      return _ProcrastinationAnalysis(
+        totalEvaluated: total,
+        onTimeCount: onTime,
+        lastMinuteCount: lastMinute,
+        lateCompletedCount: lateCompleted,
+        overduePendingCount: overduePending,
+        disciplineScore: score,
+        archetypeTitle: d['archetype_title']?.toString() ?? 'Belum Cukup Data',
+        archetypeDesc: d['archetype_desc']?.toString() ?? '',
+        archetypeColor: color,
+        archetypeIcon: archetypeIcon,
+        tips: tipsList,
+      );
+    }
+
+    // 2. Fallback perhitungan lokal (menggunakan completed_at aktual, fallback ke updated_at)
     final now = DateTime.now();
     int onTime = 0;
     int lastMinute = 0;
@@ -210,7 +262,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
       if (isCompleted) {
         DateTime? completedAt;
-        if (task['updated_at'] != null) {
+        if (task['completed_at'] != null) {
+          completedAt = DateTime.tryParse(task['completed_at'].toString());
+        } else if (task['updated_at'] != null) {
           completedAt = DateTime.tryParse(task['updated_at'].toString());
         }
         completedAt ??= deadline;

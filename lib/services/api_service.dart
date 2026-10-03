@@ -233,6 +233,29 @@ class ApiService {
   }
 
   // ==========================================
+  // 9B. FUNGSI AMBIL ANALISIS PENUNDAAN (SERVER-SIDE)
+  // ==========================================
+  Future<Map<String, dynamic>> getProcrastinationAnalysis() async {
+    SharedPreferences prefs = await SharedPreferences.getInstance();
+    String? token = prefs.getString('token');
+
+    final response = await http.get(
+      Uri.parse('$baseUrl/tasks/procrastination-analysis'),
+      headers: {
+        'Authorization': 'Bearer $token',
+        'Accept': 'application/json',
+        'ngrok-skip-browser-warning': 'true',
+      },
+    );
+
+    if (response.statusCode == 200) {
+      return json.decode(response.body);
+    } else {
+      throw Exception('Gagal memuat analisis penundaan: ${response.statusCode}');
+    }
+  }
+
+  // ==========================================
   // 10. FUNGSI AMBIL DATA PAPAN PERINGKAT
   // ==========================================
   Future<List<dynamic>> getLeaderboard() async {

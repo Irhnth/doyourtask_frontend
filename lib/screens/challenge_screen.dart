@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../services/api_service.dart';
+import '../services/notification_service.dart';
 
 class ChallengeScreen extends StatefulWidget {
   const ChallengeScreen({super.key});
@@ -35,6 +36,9 @@ class _ChallengeScreenState extends State<ChallengeScreen> {
         final currentDay = progress['current_day'] ?? 1;
         final week = ((currentDay - 1) ~/ 7) + 1;
 
+        // Jadwalkan pengingat tantangan harian jam 09:00 pagi
+        NotificationService().scheduleChallengeReminder(currentDay: currentDay);
+
         setState(() {
           _hasActiveChallenge = true;
           _challengeInfo = response['challenge'];
@@ -65,6 +69,9 @@ class _ChallengeScreenState extends State<ChallengeScreen> {
     try {
       final res = await _apiService.joinChallenge(challengeId);
       if (mounted) {
+        // Jadwalkan pengingat tantangan untuk Hari 1
+        NotificationService().scheduleChallengeReminder(currentDay: 1);
+
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(res['message'] ?? 'Berhasil memulai tantangan!'),
@@ -96,6 +103,10 @@ class _ChallengeScreenState extends State<ChallengeScreen> {
       final unlockedBadge = data['unlocked_badge'];
       final isChallengeCompleted = data['is_challenge_completed'] == true;
 
+      // Jadwalkan pengingat untuk hari berikutnya
+      final nextDay = dayNumber < 28 ? dayNumber + 1 : 28;
+      NotificationService().scheduleChallengeReminder(currentDay: nextDay);
+
       _showCelebrationDialog(
         dayNumber: dayNumber,
         earnedXp: earnedXp,
@@ -109,8 +120,21 @@ class _ChallengeScreenState extends State<ChallengeScreen> {
       _loadChallengeData();
     } catch (e) {
       if (mounted) {
+        final cleanMsg = e.toString().replaceFirst('Exception: ', '');
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(e.toString()), backgroundColor: Colors.redAccent),
+          SnackBar(
+            content: Row(
+              children: [
+                const Icon(Icons.info_outline, color: Colors.white, size: 20),
+                const SizedBox(width: 10),
+                Expanded(child: Text(cleanMsg, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500))),
+              ],
+            ),
+            backgroundColor: const Color(0xFFFF3D71),
+            behavior: SnackBarBehavior.floating,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            duration: const Duration(seconds: 4),
+          ),
         );
       }
     }

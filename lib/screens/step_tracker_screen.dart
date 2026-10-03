@@ -76,13 +76,14 @@ class _StepTrackerScreenState extends State<StepTrackerScreen> {
     setState(() => _isSyncing = true);
     try {
       final res = await _apiService.updateStepProgress(_targetId, _currentSteps);
-      if (mounted && res['status'] == 'success') {
-        final data = res['data'];
+      final isSuccess = res['status'] == 'success' || res['success'] == true;
+      if (mounted && isSuccess) {
+        final data = res['data'] ?? res;
         setState(() {
-          if (data != null && data['total_xp'] != null) {
+          if (data['total_xp'] != null) {
             _totalXp = data['total_xp'];
           }
-          if (data != null && data['is_completed'] != null) {
+          if (data['is_completed'] != null) {
             _isCompleted = data['is_completed'];
           }
         });
