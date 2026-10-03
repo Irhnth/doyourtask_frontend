@@ -229,4 +229,37 @@ class NotificationService {
   Future<void> cancelNotification(int id) async {
     await _notificationsPlugin.cancel(id);
   }
+
+  // Fungsi untuk menjadwalkan pengingat harian Tantangan 28 Hari
+  Future<void> scheduleChallengeReminder({
+    required int currentDay,
+    int hour = 9,
+    int minute = 0,
+  }) async {
+    const int challengeReminderId = 3001;
+    final scheduledDate = _nextInstanceOfTime(hour, minute);
+
+    try {
+      await _notificationsPlugin.zonedSchedule(
+        challengeReminderId,
+        '🔥 Tantangan 28 Hari: Hari ke-$currentDay!',
+        'Misi harianmu telah siap! Tuntaskan sekarang dan pertahankan streak apimu.',
+        scheduledDate,
+        const NotificationDetails(
+          android: AndroidNotificationDetails(
+            'challenge_reminder_channel',
+            'Tantangan 28 Hari',
+            channelDescription: 'Pengingat harian untuk misi tantangan 28 hari',
+            importance: Importance.high,
+            priority: Priority.high,
+            icon: '@mipmap/ic_launcher',
+          ),
+        ),
+        androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
+        uiLocalNotificationDateInterpretation:
+            UILocalNotificationDateInterpretation.absoluteTime,
+        matchDateTimeComponents: DateTimeComponents.time,
+      );
+    } catch (_) {}
+  }
 }

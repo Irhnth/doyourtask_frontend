@@ -1,5 +1,94 @@
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import '../services/api_service.dart';
+
+// ==========================================
+// MODEL DATA ANALISIS PERILAKU PENUNDAAN
+// ==========================================
+class _ProcrastinationAnalysis {
+  final int totalEvaluated;
+  final int onTimeCount;
+  final int lastMinuteCount;
+  final int lateCompletedCount;
+  final int overduePendingCount;
+  final int disciplineScore;
+  final String archetypeTitle;
+  final String archetypeDesc;
+  final Color archetypeColor;
+  final IconData archetypeIcon;
+  final List<String> tips;
+
+  _ProcrastinationAnalysis({
+    required this.totalEvaluated,
+    required this.onTimeCount,
+    required this.lastMinuteCount,
+    required this.lateCompletedCount,
+    required this.overduePendingCount,
+    required this.disciplineScore,
+    required this.archetypeTitle,
+    required this.archetypeDesc,
+    required this.archetypeColor,
+    required this.archetypeIcon,
+    required this.tips,
+  });
+}
+
+// ==========================================
+// MODEL DATA MONITORING PRODUKTIVITAS HARIAN
+// ==========================================
+class _DailyProductivityData {
+  final DateTime date;
+  final String dayLabel; // 'Sen', 'Sel', 'Rab', dst.
+  final String fullDayName; // 'Senin', 'Selasa', dst.
+  final String dateFormatted; // '3 Okt'
+  final int completedCount;
+  final int earnedXp;
+  final bool isToday;
+
+  _DailyProductivityData({
+    required this.date,
+    required this.dayLabel,
+    required this.fullDayName,
+    required this.dateFormatted,
+    required this.completedCount,
+    required this.earnedXp,
+    required this.isToday,
+  });
+}
+
+class _ProductivityMonitoringStats {
+  final List<_DailyProductivityData> dailyData;
+  final int todayCompleted;
+  final int yesterdayCompleted;
+  final int dayDifference;
+  final String comparisonText;
+  final Color comparisonColor;
+  final IconData comparisonIcon;
+  final int currentStreak;
+  final double averagePerDay;
+  final String bestDayName;
+  final int bestDayCount;
+  final int totalPeriodCompleted;
+  final int totalPeriodXp;
+  final int daysRange;
+
+  _ProductivityMonitoringStats({
+    required this.dailyData,
+    required this.todayCompleted,
+    required this.yesterdayCompleted,
+    required this.dayDifference,
+    required this.comparisonText,
+    required this.comparisonColor,
+    required this.comparisonIcon,
+    required this.currentStreak,
+    required this.averagePerDay,
+    required this.bestDayName,
+    required this.bestDayCount,
+    required this.totalPeriodCompleted,
+    required this.totalPeriodXp,
+    required this.daysRange,
+  });
+}
 
 class ProfileScreen extends StatefulWidget {
   const ProfileScreen({super.key});
@@ -17,11 +106,34 @@ class _ProfileScreenState extends State<ProfileScreen> {
   List<dynamic> _leaderboard = [];
 
   bool _isLoading = true;
+  int _selectedDaysRange = 30; // Default menampilkan hingga 30 hari
+  int _selectedChartDayIndex = 29; // Default memilih hari terakhir
+  bool _isHistoryExpanded = false; // Toggle untuk riwayat harian
+  final ScrollController _chartScrollController = ScrollController();
 
   @override
   void initState() {
     super.initState();
+    _selectedChartDayIndex = _selectedDaysRange - 1;
     _loadProfileData();
+  }
+
+  @override
+  void dispose() {
+    _chartScrollController.dispose();
+    super.dispose();
+  }
+
+  void _scrollToLatest() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_chartScrollController.hasClients) {
+        _chartScrollController.animateTo(
+          _chartScrollController.position.maxScrollExtent,
+          duration: const Duration(milliseconds: 300),
+          curve: Curves.easeOut,
+        );
+      }
+    });
   }
 
   Future<void> _loadProfileData() async {
@@ -40,8 +152,12 @@ class _ProfileScreenState extends State<ProfileScreen> {
           _tasks = results[1] as List<dynamic>;
           _healthTargets = results[2] as List<dynamic>;
           _leaderboard = results[3] as List<dynamic>;
+          _selectedChartDayIndex = _selectedDaysRange - 1;
           _isLoading = false;
         });
+        if (_selectedDaysRange > 7) {
+          _scrollToLatest();
+        }
       }
     } catch (e) {
       if (mounted) {
@@ -72,6 +188,277 @@ class _ProfileScreenState extends State<ProfileScreen> {
       }
     }
     return null;
+  }
+
+  // ==========================================
+  // PERHITUNGAN ANALISIS PERILAKU PENUNDAAN
+  // ==========================================
+  _ProcrastinationAnalysis _computeProcrastinationStats() {
+    final now = DateTime.now();
+    int onTime = 0;
+    int lastMinute = 0;
+    int lateCompleted = 0;
+    int overduePending = 0;
+
+    for (final task in _tasks) {
+      final deadlineRaw = task['deadline'];
+      if (deadlineRaw == null) continue;
+      final deadline = DateTime.tryParse(deadlineRaw.toString());
+      if (deadline == null) continue;
+
+      final isCompleted = task['status'] == 'completed';
+
+      if (isCompleted) {
+        DateTime? completedAt;
+        if (task['updated_at'] != null) {
+          completedAt = DateTime.tryParse(task['updated_at'].toString());
+        }
+        completedAt ??= deadline;
+
+        if (completedAt.isAfter(deadline)) {
+          lateCompleted++;
+        } else {
+          final diffToDeadline = deadline.difference(completedAt);
+          // Bila diselesaikan kurang dari 3 jam sebelum deadline tiba
+          if (diffToDeadline.inHours < 3) {
+            lastMinute++;
+          } else {
+            onTime++;
+          }
+        }
+      } else {
+        // Quest pending yang sudah melewati tenggat waktu
+        if (now.isAfter(deadline)) {
+          overduePending++;
+        }
+      }
+    }
+
+    final totalEvaluated = onTime + lastMinute + lateCompleted + overduePending;
+
+    int score = 0;
+    if (totalEvaluated > 0) {
+      // Bobot: On-Time = 100%, Mepet Tenggat = 50%, Terlambat/Overdue = 0%
+      final rawScore = ((onTime * 1.0 + lastMinute * 0.5) / totalEvaluated) * 100;
+      score = rawScore.round().clamp(0, 100);
+    }
+
+    String archetypeTitle;
+    String archetypeDesc;
+    Color archetypeColor;
+    IconData archetypeIcon;
+    List<String> tips;
+
+    if (totalEvaluated == 0) {
+      archetypeTitle = 'Belum Cukup Data';
+      archetypeDesc = 'Selesaikan beberapa quest untuk mulai melihat pola manajemen waktumu.';
+      archetypeColor = const Color(0xFF8F9BB3);
+      archetypeIcon = Icons.hourglass_empty_rounded;
+      tips = [
+        'Tetapkan tenggat waktu yang realistis pada setiap quest baru.',
+        'Selesaikan tugas lebih awal untuk membangun ritme kerja yang tenang.',
+        'Manfaatkan timer Pomodoro di menu Kesehatan untuk melatih fokus intensif.',
+      ];
+    } else if (score >= 80 && overduePending == 0) {
+      archetypeTitle = 'Eksekutor Proaktif';
+      archetypeDesc = 'Luar biasa! Kamu konsisten menuntaskan quest jauh sebelum batas waktu tanpa menunda.';
+      archetypeColor = const Color(0xFF00E096);
+      archetypeIcon = Icons.verified_user_rounded;
+      tips = [
+        'Pertahankan kebiasaan baik dengan terus memecah quest besar menjadi langkah kecil.',
+        'Berikan waktu istirahat yang cukup di sela-sela pencapaian tugasmu agar tidak burnout.',
+        'Tantang dirimu dengan quest baru yang lebih menantang untuk memaksimalkan perolehan XP.',
+      ];
+    } else if (score >= 50 || (lastMinute > onTime && overduePending <= 1)) {
+      archetypeTitle = 'Pejuang Deadline';
+      archetypeDesc = 'Kamu sering menyelesaikan quest mepet menit-menit akhir menjelang batas waktu.';
+      archetypeColor = const Color(0xFFFFAA00);
+      archetypeIcon = Icons.bolt_rounded;
+      tips = [
+        'Terapkan "Aturan 5 Menit": paksa dirimu memulai tugas selama 5 menit tanpa distraksi untuk mengatasi rasa malas awal.',
+        'Gunakan timer Pomodoro (25 menit kerja, 5 menit istirahat) untuk mencegah stres di akhir.',
+        'Buat target selesai pribadi 3-6 jam sebelum tenggat waktu sebenarnya.',
+      ];
+    } else {
+      archetypeTitle = 'Kerap Menunda';
+      archetypeDesc = 'Terdapat beberapa quest yang terlambat atau melewati tenggat waktu. Yuk atur ulang fokusmu!';
+      archetypeColor = const Color(0xFFFF3D71);
+      archetypeIcon = Icons.warning_amber_rounded;
+      tips = [
+        'Pilih 1 quest yang paling mudah dan selesaikan sekarang juga untuk memicu momentum.',
+        'Hindari menumpuk deadline di jam yang sama; distribusikan tugas secara bertahap.',
+        'Aktifkan pengingat notifikasi kesehatan dan quest agar kamu selalu mendapat alarm berkala.',
+      ];
+    }
+
+    return _ProcrastinationAnalysis(
+      totalEvaluated: totalEvaluated,
+      onTimeCount: onTime,
+      lastMinuteCount: lastMinute,
+      lateCompletedCount: lateCompleted,
+      overduePendingCount: overduePending,
+      disciplineScore: score,
+      archetypeTitle: archetypeTitle,
+      archetypeDesc: archetypeDesc,
+      archetypeColor: archetypeColor,
+      archetypeIcon: archetypeIcon,
+      tips: tips,
+    );
+  }
+
+  // ==========================================
+  // PERHITUNGAN MONITORING PRODUKTIVITAS HARIAN
+  // ==========================================
+  _ProductivityMonitoringStats _computeProductivityMonitoring() {
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final daysRange = _selectedDaysRange;
+
+    const dayNames = ['Sen', 'Sel', 'Rab', 'Kam', 'Jum', 'Sab', 'Min'];
+    const fullDayNames = ['Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu', 'Minggu'];
+    const monthNames = [
+      'Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun',
+      'Jul', 'Agt', 'Sep', 'Okt', 'Nov', 'Des'
+    ];
+
+    // Ambil rentang hari terakhir sesuai selectedDaysRange (H-(daysRange-1) sampai H-0)
+    final List<DateTime> rangeDays = List.generate(daysRange, (i) {
+      return today.subtract(Duration(days: daysRange - 1 - i));
+    });
+
+    final Map<String, int> completedMap = {};
+    final Map<String, int> xpMap = {};
+
+    for (final task in _tasks) {
+      if (task['status'] != 'completed') continue;
+
+      DateTime? completedDate;
+      if (task['updated_at'] != null) {
+        completedDate = DateTime.tryParse(task['updated_at'].toString());
+      }
+      if (completedDate == null && task['deadline'] != null) {
+        completedDate = DateTime.tryParse(task['deadline'].toString());
+      }
+      if (completedDate == null) continue;
+
+      final localDate = completedDate.toLocal();
+      final key = '${localDate.year}-${localDate.month.toString().padLeft(2, '0')}-${localDate.day.toString().padLeft(2, '0')}';
+
+      completedMap[key] = (completedMap[key] ?? 0) + 1;
+      final xp = (task['reward_xp'] is num) ? (task['reward_xp'] as num).toInt() : 50;
+      xpMap[key] = (xpMap[key] ?? 0) + xp;
+    }
+
+    final List<_DailyProductivityData> dailyData = [];
+    int totalPeriodCompleted = 0;
+    int totalPeriodXp = 0;
+    String bestDay = '-';
+    int bestCount = 0;
+
+    for (int i = 0; i < rangeDays.length; i++) {
+      final date = rangeDays[i];
+      final key = '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
+      final completed = completedMap[key] ?? 0;
+      final xp = xpMap[key] ?? 0;
+
+      final isCurrentDay = i == rangeDays.length - 1;
+      final dayLabel = dayNames[date.weekday - 1];
+      final fullDay = fullDayNames[date.weekday - 1];
+      final dateFormatted = '${date.day} ${monthNames[date.month - 1]}';
+
+      totalPeriodCompleted += completed;
+      totalPeriodXp += xp;
+
+      if (completed > bestCount) {
+        bestCount = completed;
+        bestDay = fullDay;
+      }
+
+      dailyData.add(_DailyProductivityData(
+        date: date,
+        dayLabel: dayLabel,
+        fullDayName: fullDay,
+        dateFormatted: dateFormatted,
+        completedCount: completed,
+        earnedXp: xp,
+        isToday: isCurrentDay,
+      ));
+    }
+
+    // Hari ini vs Kemarin
+    final todayKey = '${today.year}-${today.month.toString().padLeft(2, '0')}-${today.day.toString().padLeft(2, '0')}';
+    final yesterday = today.subtract(const Duration(days: 1));
+    final yesterdayKey = '${yesterday.year}-${yesterday.month.toString().padLeft(2, '0')}-${yesterday.day.toString().padLeft(2, '0')}';
+
+    final int todayCompleted = completedMap[todayKey] ?? 0;
+    final int yesterdayCompleted = completedMap[yesterdayKey] ?? 0;
+    final int dayDifference = todayCompleted - yesterdayCompleted;
+
+    String comparisonText;
+    Color comparisonColor;
+    IconData comparisonIcon;
+
+    if (dayDifference > 0) {
+      if (yesterdayCompleted == 0) {
+        comparisonText = 'Naik +$dayDifference quest dibanding kemarin';
+      } else {
+        final percent = ((dayDifference / yesterdayCompleted) * 100).round();
+        comparisonText = 'Naik +$dayDifference quest (+$percent%) dibanding kemarin';
+      }
+      comparisonColor = const Color(0xFF00E096);
+      comparisonIcon = Icons.trending_up_rounded;
+    } else if (dayDifference == 0) {
+      comparisonText = 'Sama dengan kemarin ($todayCompleted quest)';
+      comparisonColor = const Color(0xFF3366FF);
+      comparisonIcon = Icons.trending_flat_rounded;
+    } else {
+      final diffAbs = dayDifference.abs();
+      comparisonText = 'Turun $diffAbs quest dibanding kemarin';
+      comparisonColor = const Color(0xFFFF9E00);
+      comparisonIcon = Icons.trending_down_rounded;
+    }
+
+    // Hitung Streak berturut-turut (hingga 60 hari ke belakang)
+    int streak = 0;
+    bool checkingToday = true;
+    for (int i = 0; i < 60; i++) {
+      final d = today.subtract(Duration(days: i));
+      final k = '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+      final c = completedMap[k] ?? 0;
+      if (checkingToday) {
+        if (c > 0) {
+          streak++;
+          checkingToday = false;
+        } else {
+          checkingToday = false;
+        }
+      } else {
+        if (c > 0) {
+          streak++;
+        } else {
+          break;
+        }
+      }
+    }
+
+    final double avgPerDay = (totalPeriodCompleted / daysRange.toDouble());
+
+    return _ProductivityMonitoringStats(
+      dailyData: dailyData,
+      todayCompleted: todayCompleted,
+      yesterdayCompleted: yesterdayCompleted,
+      dayDifference: dayDifference,
+      comparisonText: comparisonText,
+      comparisonColor: comparisonColor,
+      comparisonIcon: comparisonIcon,
+      currentStreak: streak,
+      averagePerDay: avgPerDay,
+      bestDayName: bestCount > 0 ? bestDay : 'Belum Ada',
+      bestDayCount: bestCount,
+      totalPeriodCompleted: totalPeriodCompleted,
+      totalPeriodXp: totalPeriodXp,
+      daysRange: daysRange,
+    );
   }
 
   @override
@@ -120,6 +507,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     _buildStatsOverviewSection(),
                     const SizedBox(height: 28),
                     _buildTaskAnalyticsCard(),
+                    const SizedBox(height: 28),
+                    _buildProcrastinationAnalysisCard(),
+                    const SizedBox(height: 28),
+                    _buildDailyProductivityMonitoringCard(),
                     const SizedBox(height: 28),
                     _buildHealthHabitAnalyticsCard(),
                     const SizedBox(height: 28),
@@ -191,7 +582,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
             ),
           ),
           const SizedBox(height: 14),
-          // Chips status singkat
           Wrap(
             spacing: 8,
             runSpacing: 8,
@@ -615,7 +1005,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
             ],
           ),
           const SizedBox(height: 16),
-          // Bar perbandingan visual
           ClipRRect(
             borderRadius: BorderRadius.circular(8),
             child: Row(
@@ -641,7 +1030,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
             ),
           ),
           const SizedBox(height: 16),
-          // 3 Kolom Metrik
           Row(
             children: [
               Expanded(
@@ -670,7 +1058,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
             ],
           ),
           const SizedBox(height: 14),
-          // Status motivasi
           Container(
             width: double.infinity,
             padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
@@ -708,6 +1095,989 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   ),
                 ),
               ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ==========================================
+  // 5. KARTU ANALISIS PERILAKU PENUNDAAN
+  // ==========================================
+  Widget _buildProcrastinationAnalysisCard() {
+    final stats = _computeProcrastinationStats();
+
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(22),
+        boxShadow: [
+          BoxShadow(
+            color: const Color(0xFF8F9BB3).withOpacity(0.08),
+            blurRadius: 20,
+            offset: const Offset(0, 6),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              const Row(
+                children: [
+                  Icon(Icons.timelapse_rounded, color: Color(0xFF3366FF), size: 20),
+                  SizedBox(width: 8),
+                  Text(
+                    'Analisis Penundaan',
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                      color: Color(0xFF222B45),
+                    ),
+                  ),
+                ],
+              ),
+              IconButton(
+                icon: const Icon(Icons.info_outline_rounded, color: Color(0xFF8F9BB3), size: 20),
+                tooltip: 'Rincian & Tips',
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(),
+                onPressed: () => _showProcrastinationTipsModal(stats),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              color: stats.archetypeColor.withOpacity(0.08),
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: stats.archetypeColor.withOpacity(0.25)),
+            ),
+            child: Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    shape: BoxShape.circle,
+                    boxShadow: [
+                      BoxShadow(
+                        color: stats.archetypeColor.withOpacity(0.2),
+                        blurRadius: 8,
+                        offset: const Offset(0, 2),
+                      ),
+                    ],
+                  ),
+                  child: Icon(stats.archetypeIcon, color: stats.archetypeColor, size: 24),
+                ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Flexible(
+                            child: Text(
+                              stats.archetypeTitle,
+                              style: TextStyle(
+                                fontSize: 15,
+                                fontWeight: FontWeight.bold,
+                                color: stats.archetypeColor,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 6),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: Colors.white,
+                              borderRadius: BorderRadius.circular(6),
+                            ),
+                            child: Text(
+                              '${stats.disciplineScore}% Skor',
+                              style: TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.bold,
+                                color: stats.archetypeColor,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        stats.archetypeDesc,
+                        style: const TextStyle(
+                          fontSize: 12,
+                          color: Color(0xFF222B45),
+                          fontWeight: FontWeight.w500,
+                          height: 1.3,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 16),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              const Text(
+                'Tingkat Ketepatan Waktu',
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  color: Color(0xFF8F9BB3),
+                ),
+              ),
+              Text(
+                '${stats.disciplineScore}%',
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.bold,
+                  color: stats.archetypeColor,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(8),
+            child: LinearProgressIndicator(
+              value: stats.totalEvaluated == 0 ? 0.0 : (stats.disciplineScore / 100.0),
+              minHeight: 10,
+              backgroundColor: const Color(0xFFEDF1F7),
+              color: stats.archetypeColor,
+            ),
+          ),
+          const SizedBox(height: 16),
+          Row(
+            children: [
+              Expanded(
+                child: _buildMetricItem(
+                  label: 'Tepat Waktu',
+                  count: '${stats.onTimeCount}',
+                  dotColor: const Color(0xFF00E096),
+                ),
+              ),
+              Container(width: 1, height: 32, color: const Color(0xFFEDF1F7)),
+              Expanded(
+                child: _buildMetricItem(
+                  label: 'Mepet Tenggat',
+                  count: '${stats.lastMinuteCount}',
+                  dotColor: const Color(0xFFFFAA00),
+                ),
+              ),
+              Container(width: 1, height: 32, color: const Color(0xFFEDF1F7)),
+              Expanded(
+                child: _buildMetricItem(
+                  label: 'Terlambat',
+                  count: '${stats.lateCompletedCount}',
+                  dotColor: const Color(0xFFFF3D71),
+                ),
+              ),
+            ],
+          ),
+          if (stats.overduePendingCount > 0) ...[
+            const SizedBox(height: 14),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              decoration: BoxDecoration(
+                color: const Color(0xFFFFEBF1),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: const Color(0xFFFF3D71).withOpacity(0.3)),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.error_outline_rounded, color: Color(0xFFFF3D71), size: 18),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Ada ${stats.overduePendingCount} quest aktif yang melewati tenggat waktu!',
+                      style: const TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.bold,
+                        color: Color(0xFFFF3D71),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+          const SizedBox(height: 14),
+          SizedBox(
+            width: double.infinity,
+            child: OutlinedButton.icon(
+              style: OutlinedButton.styleFrom(
+                foregroundColor: const Color(0xFF3366FF),
+                side: const BorderSide(color: Color(0xFFE4E9F2)),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                padding: const EdgeInsets.symmetric(vertical: 10),
+              ),
+              onPressed: () => _showProcrastinationTipsModal(stats),
+              icon: const Icon(Icons.lightbulb_outline_rounded, size: 16),
+              label: const Text(
+                'Lihat Tips & Strategi Anti-Penundaan',
+                style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showProcrastinationTipsModal(_ProcrastinationAnalysis stats) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) {
+        return Container(
+          padding: const EdgeInsets.fromLTRB(24, 16, 24, 28),
+          decoration: const BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Center(
+                child: Container(
+                  width: 40,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFEDF1F7),
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 16),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(8),
+                        decoration: BoxDecoration(
+                          color: stats.archetypeColor.withOpacity(0.12),
+                          shape: BoxShape.circle,
+                        ),
+                        child: Icon(stats.archetypeIcon, color: stats.archetypeColor, size: 22),
+                      ),
+                      const SizedBox(width: 10),
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text(
+                            'Strategi Anti-Penundaan',
+                            style: TextStyle(
+                              fontSize: 17,
+                              fontWeight: FontWeight.bold,
+                              color: Color(0xFF222B45),
+                            ),
+                          ),
+                          Text(
+                            'Profil: ${stats.archetypeTitle}',
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: stats.archetypeColor,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.close_rounded, color: Color(0xFF8F9BB3)),
+                    onPressed: () => Navigator.pop(context),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 16),
+              const Divider(color: Color(0xFFEDF1F7)),
+              const SizedBox(height: 12),
+              const Text(
+                'Rekomendasi Aksi untuk Kamu:',
+                style: TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.bold,
+                  color: Color(0xFF222B45),
+                ),
+              ),
+              const SizedBox(height: 12),
+              ...stats.tips.asMap().entries.map((entry) {
+                final idx = entry.key + 1;
+                final tip = entry.value;
+                return Padding(
+                  padding: const EdgeInsets.only(bottom: 12),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Container(
+                        width: 24,
+                        height: 24,
+                        alignment: Alignment.center,
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFEBF1FF),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Text(
+                          '$idx',
+                          style: const TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.bold,
+                            color: Color(0xFF3366FF),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Text(
+                          tip,
+                          style: const TextStyle(
+                            fontSize: 13,
+                            color: Color(0xFF222B45),
+                            height: 1.4,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                );
+              }),
+              const SizedBox(height: 16),
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF3366FF),
+                    foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                  ),
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text('Mengerti, Saya Siap Fokus!', style: TextStyle(fontWeight: FontWeight.bold)),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  // ==========================================
+  // 6. KARTU MONITORING PRODUKTIVITAS HARIAN
+  // ==========================================
+  Widget _buildDailyProductivityMonitoringCard() {
+    final stats = _computeProductivityMonitoring();
+    final safeSelectedIndex = _selectedChartDayIndex.clamp(0, stats.dailyData.length - 1);
+    final selectedDayData = stats.dailyData[safeSelectedIndex];
+
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(22),
+        boxShadow: [
+          BoxShadow(
+            color: const Color(0xFF8F9BB3).withOpacity(0.08),
+            blurRadius: 20,
+            offset: const Offset(0, 6),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Header Monitoring & Filter Rentang (7 Hari vs 30 Hari)
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              const Row(
+                children: [
+                  Icon(Icons.insights_rounded, color: Color(0xFF3366FF), size: 20),
+                  SizedBox(width: 8),
+                  Text(
+                    'Monitoring Produktivitas',
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                      color: Color(0xFF222B45),
+                    ),
+                  ),
+                ],
+              ),
+              // Segmented Toggle Filter Rentang Hari
+              Container(
+                padding: const EdgeInsets.all(3),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFF0F4FC),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: const Color(0xFFEDF1F7)),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    _buildRangeToggleChip(7, '7H'),
+                    _buildRangeToggleChip(30, '30H'),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+
+          // Banner Perbandingan Hari Ini vs Kemarin
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+            decoration: BoxDecoration(
+              color: stats.comparisonColor.withOpacity(0.08),
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: stats.comparisonColor.withOpacity(0.25)),
+            ),
+            child: Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    shape: BoxShape.circle,
+                    boxShadow: [
+                      BoxShadow(
+                        color: stats.comparisonColor.withOpacity(0.2),
+                        blurRadius: 6,
+                        offset: const Offset(0, 2),
+                      ),
+                    ],
+                  ),
+                  child: Icon(stats.comparisonIcon, color: stats.comparisonColor, size: 20),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        stats.comparisonText,
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.bold,
+                          color: stats.comparisonColor,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        'Hari ini: ${stats.todayCompleted} quest  •  Kemarin: ${stats.yesterdayCompleted} quest',
+                        style: const TextStyle(
+                          fontSize: 11,
+                          color: Color(0xFF8F9BB3),
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 20),
+
+          // Judul Grafik & Total Periode
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                'Grafik Aktivitas (${stats.daysRange} Hari)',
+                style: const TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.bold,
+                  color: Color(0xFF222B45),
+                ),
+              ),
+              Text(
+                '${stats.totalPeriodCompleted} Selesai • +${stats.totalPeriodXp} XP',
+                style: const TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                  color: Color(0xFF8F9BB3),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+
+          // WIDGET GRAFIK BATANG INTERAKTIF (Hingga 30 Hari dengan Scroll)
+          _buildInteractiveBarChart(stats),
+          const SizedBox(height: 12),
+
+          // Detail Hari yang Dipilih dari Grafik
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+            decoration: BoxDecoration(
+              color: const Color(0xFFF7F9FC),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: const Color(0xFFEDF1F7)),
+            ),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Row(
+                  children: [
+                    const Icon(Icons.event_note_rounded, size: 16, color: Color(0xFF3366FF)),
+                    const SizedBox(width: 8),
+                    Text(
+                      '${selectedDayData.fullDayName}, ${selectedDayData.dateFormatted}${selectedDayData.isToday ? " (Hari Ini)" : ""}',
+                      style: const TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.bold,
+                        color: Color(0xFF222B45),
+                      ),
+                    ),
+                  ],
+                ),
+                Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                      decoration: BoxDecoration(
+                        color: selectedDayData.completedCount > 0
+                            ? const Color(0xFFE6FBF5)
+                            : const Color(0xFFEDF1F7),
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      child: Text(
+                        '${selectedDayData.completedCount} Quest',
+                        style: TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.bold,
+                          color: selectedDayData.completedCount > 0
+                              ? const Color(0xFF00E096)
+                              : const Color(0xFF8F9BB3),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFFFF8E7),
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      child: Text(
+                        '+${selectedDayData.earnedXp} XP',
+                        style: const TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.bold,
+                          color: Color(0xFFFFAA00),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 18),
+
+          // 3 Pill Indikator Tren (Streak, Rata-rata, Hari Terbaik)
+          Row(
+            children: [
+              Expanded(
+                child: _buildTrendPill(
+                  icon: Icons.local_fire_department_rounded,
+                  iconColor: const Color(0xFFFF7A00),
+                  bgColor: const Color(0xFFFFF3E0),
+                  value: '${stats.currentStreak} Hari',
+                  label: 'Streak Aktif',
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: _buildTrendPill(
+                  icon: Icons.speed_rounded,
+                  iconColor: const Color(0xFF3366FF),
+                  bgColor: const Color(0xFFEBF1FF),
+                  value: stats.averagePerDay.toStringAsFixed(1),
+                  label: 'Rata-rata/Hari',
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: _buildTrendPill(
+                  icon: Icons.emoji_events_rounded,
+                  iconColor: const Color(0xFFFFAA00),
+                  bgColor: const Color(0xFFFFF8E7),
+                  value: stats.bestDayName,
+                  label: stats.bestDayCount > 0 ? '${stats.bestDayCount} Quest' : 'Terbanyak',
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 18),
+
+          // Riwayat Hari Terakhir (Expandable)
+          InkWell(
+            onTap: () {
+              setState(() {
+                _isHistoryExpanded = !_isHistoryExpanded;
+              });
+            },
+            borderRadius: BorderRadius.circular(12),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              decoration: BoxDecoration(
+                color: const Color(0xFFF7F9FC),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: const Color(0xFFEDF1F7)),
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Row(
+                    children: [
+                      const Icon(Icons.history_rounded, size: 18, color: Color(0xFF8F9BB3)),
+                      const SizedBox(width: 8),
+                      Text(
+                        _isHistoryExpanded
+                            ? 'Sembunyikan Riwayat Harian'
+                            : 'Tampilkan Riwayat ${stats.daysRange} Hari',
+                        style: const TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.bold,
+                          color: Color(0xFF222B45),
+                        ),
+                      ),
+                    ],
+                  ),
+                  Icon(
+                    _isHistoryExpanded ? Icons.keyboard_arrow_up_rounded : Icons.keyboard_arrow_down_rounded,
+                    color: const Color(0xFF8F9BB3),
+                    size: 20,
+                  ),
+                ],
+              ),
+            ),
+          ),
+
+          if (_isHistoryExpanded) ...[
+            const SizedBox(height: 12),
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxHeight: 280),
+              child: ListView.separated(
+                shrinkWrap: true,
+                physics: const BouncingScrollPhysics(),
+                itemCount: stats.dailyData.length,
+                separatorBuilder: (_, __) => const SizedBox(height: 8),
+                itemBuilder: (context, index) {
+                  // Tampilkan dari hari terbaru ke terlama
+                  final revIndex = stats.dailyData.length - 1 - index;
+                  final day = stats.dailyData[revIndex];
+                  final isSelected = revIndex == safeSelectedIndex;
+
+                  return InkWell(
+                    onTap: () {
+                      setState(() {
+                        _selectedChartDayIndex = revIndex;
+                      });
+                    },
+                    borderRadius: BorderRadius.circular(10),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                      decoration: BoxDecoration(
+                        color: isSelected ? const Color(0xFFEBF1FF) : Colors.white,
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(
+                          color: isSelected ? const Color(0xFF3366FF).withOpacity(0.4) : const Color(0xFFEDF1F7),
+                        ),
+                      ),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Row(
+                            children: [
+                              Container(
+                                width: 8,
+                                height: 8,
+                                decoration: BoxDecoration(
+                                  color: day.completedCount > 0 ? const Color(0xFF00E096) : const Color(0xFFC5CEE0),
+                                  shape: BoxShape.circle,
+                                ),
+                              ),
+                              const SizedBox(width: 10),
+                              Text(
+                                '${day.fullDayName}, ${day.dateFormatted}${day.isToday ? " (Hari Ini)" : ""}',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: day.isToday ? FontWeight.bold : FontWeight.w500,
+                                  color: day.isToday ? const Color(0xFF3366FF) : const Color(0xFF222B45),
+                                ),
+                              ),
+                            ],
+                          ),
+                          Row(
+                            children: [
+                              Text(
+                                '${day.completedCount} Quest',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.bold,
+                                  color: day.completedCount > 0 ? const Color(0xFF222B45) : const Color(0xFF8F9BB3),
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              Text(
+                                '+${day.earnedXp} XP',
+                                style: const TextStyle(
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.bold,
+                                  color: Color(0xFFFFAA00),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  // Chip Toggle Pilihan Rentang Hari
+  Widget _buildRangeToggleChip(int days, String label) {
+    final isSelected = _selectedDaysRange == days;
+    return GestureDetector(
+      onTap: () {
+        if (_selectedDaysRange != days) {
+          setState(() {
+            _selectedDaysRange = days;
+            _selectedChartDayIndex = days - 1;
+          });
+          if (days > 7) {
+            _scrollToLatest();
+          }
+        }
+      },
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+        decoration: BoxDecoration(
+          color: isSelected ? const Color(0xFF3366FF) : Colors.transparent,
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            fontSize: 11,
+            fontWeight: FontWeight.bold,
+            color: isSelected ? Colors.white : const Color(0xFF8F9BB3),
+          ),
+        ),
+      ),
+    );
+  }
+
+  // Widget Grafik Batang Interaktif (Hingga 30 Hari)
+  Widget _buildInteractiveBarChart(_ProductivityMonitoringStats stats) {
+    int maxVal = 3;
+    for (final d in stats.dailyData) {
+      if (d.completedCount > maxVal) {
+        maxVal = d.completedCount;
+      }
+    }
+
+    const double chartMaxHeight = 90.0;
+    final isLongRange = stats.dailyData.length > 7;
+
+    final Widget chartContent = Row(
+      mainAxisAlignment: isLongRange ? MainAxisAlignment.start : MainAxisAlignment.spaceBetween,
+      crossAxisAlignment: CrossAxisAlignment.end,
+      children: stats.dailyData.asMap().entries.map((entry) {
+        final index = entry.key;
+        final day = entry.value;
+        final isSelected = index == _selectedChartDayIndex;
+
+        final double barHeight = day.completedCount == 0
+            ? 8.0
+            : math.max(16.0, (day.completedCount / maxVal) * chartMaxHeight);
+
+        Color barColor;
+        if (isSelected) {
+          barColor = const Color(0xFF3366FF);
+        } else if (day.isToday) {
+          barColor = const Color(0xFF3366FF).withOpacity(0.75);
+        } else if (day.completedCount > 0) {
+          barColor = const Color(0xFF00E096);
+        } else {
+          barColor = const Color(0xFFEDF1F7);
+        }
+
+        return GestureDetector(
+          onTap: () {
+            setState(() {
+              _selectedChartDayIndex = index;
+            });
+          },
+          child: Container(
+            width: isLongRange ? 30 : 38,
+            margin: isLongRange ? const EdgeInsets.symmetric(horizontal: 4) : EdgeInsets.zero,
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: [
+                // Angka di atas batang
+                Text(
+                  '${day.completedCount}',
+                  style: TextStyle(
+                    fontSize: 10,
+                    fontWeight: FontWeight.bold,
+                    color: isSelected
+                        ? const Color(0xFF3366FF)
+                        : (day.completedCount > 0 ? const Color(0xFF222B45) : const Color(0xFF8F9BB3)),
+                  ),
+                ),
+                const SizedBox(height: 6),
+
+                // Batang animasi
+                AnimatedContainer(
+                  duration: const Duration(milliseconds: 250),
+                  height: barHeight,
+                  width: isLongRange ? 18 : 22,
+                  decoration: BoxDecoration(
+                    color: barColor,
+                    borderRadius: BorderRadius.circular(6),
+                    boxShadow: isSelected
+                        ? [
+                            BoxShadow(
+                              color: const Color(0xFF3366FF).withOpacity(0.35),
+                              blurRadius: 8,
+                              offset: const Offset(0, 3),
+                            ),
+                          ]
+                        : null,
+                  ),
+                ),
+                const SizedBox(height: 8),
+
+                // Label Hari / Tanggal
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                  decoration: isSelected
+                      ? BoxDecoration(
+                          color: const Color(0xFF3366FF),
+                          borderRadius: BorderRadius.circular(6),
+                        )
+                      : null,
+                  child: Text(
+                    isLongRange ? '${day.date.day}' : day.dayLabel,
+                    style: TextStyle(
+                      fontSize: 10,
+                      fontWeight: (isSelected || day.isToday) ? FontWeight.bold : FontWeight.w600,
+                      color: isSelected
+                          ? Colors.white
+                          : (day.isToday ? const Color(0xFF3366FF) : const Color(0xFF8F9BB3)),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      }).toList(),
+    );
+
+    if (isLongRange) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SingleChildScrollView(
+            controller: _chartScrollController,
+            scrollDirection: Axis.horizontal,
+            physics: const BouncingScrollPhysics(),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+              child: chartContent,
+            ),
+          ),
+          const SizedBox(height: 8),
+          const Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(Icons.swipe_left_rounded, size: 14, color: Color(0xFF8F9BB3)),
+              SizedBox(width: 4),
+              Text(
+                'Geser grafik untuk menjelajah riwayat hingga 30 hari',
+                style: TextStyle(fontSize: 10, color: Color(0xFF8F9BB3), fontWeight: FontWeight.w500),
+              ),
+            ],
+          ),
+        ],
+      );
+    }
+
+    return Container(
+      padding: const EdgeInsets.only(top: 8, bottom: 4),
+      child: chartContent,
+    );
+  }
+
+  // Widget Pill Indikator Tren
+  Widget _buildTrendPill({
+    required IconData icon,
+    required Color iconColor,
+    required Color bgColor,
+    required String value,
+    required String label,
+  }) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 12),
+      decoration: BoxDecoration(
+        color: bgColor,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: iconColor.withOpacity(0.2)),
+      ),
+      child: Column(
+        children: [
+          Icon(icon, color: iconColor, size: 20),
+          const SizedBox(height: 6),
+          Text(
+            value,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.bold,
+              color: Color(0xFF222B45),
+            ),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            label,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              fontSize: 10,
+              fontWeight: FontWeight.w600,
+              color: const Color(0xFF222B45).withOpacity(0.6),
             ),
           ),
         ],
@@ -758,7 +2128,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 
   // ==========================================
-  // 5. KARTU ANALISIS KESEHATAN & KEBIASAAN
+  // 7. KARTU ANALISIS KESEHATAN & KEBIASAAN
   // ==========================================
   Widget _buildHealthHabitAnalyticsCard() {
     final totalHealth = _healthTargets.length;
@@ -954,7 +2324,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 
   // ==========================================
-  // 6. WIDGET RAK LENCANA (BADGES)
+  // 8. WIDGET RAK LENCANA (BADGES)
   // ==========================================
   Widget _buildBadgesSection() {
     List<dynamic> badges = _userProfile?['badges'] ?? [];

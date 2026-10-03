@@ -378,4 +378,103 @@ class ApiService {
       throw Exception('Gagal mengubah target kesehatan');
     }
   }
+
+  // ==========================================
+  // 14. FUNGSI AMBIL TANTANGAN AKTIF (28 HARI)
+  // ==========================================
+  Future<Map<String, dynamic>> getActiveChallenge() async {
+    SharedPreferences prefs = await SharedPreferences.getInstance();
+    String? token = prefs.getString('token');
+
+    final response = await http.get(
+      Uri.parse('$baseUrl/challenges/active'),
+      headers: {
+        'Authorization': 'Bearer $token',
+        'Accept': 'application/json',
+        'ngrok-skip-browser-warning': 'true',
+      },
+    );
+
+    if (response.statusCode == 200) {
+      return json.decode(response.body);
+    } else {
+      throw Exception('Gagal memuat data tantangan 28 hari');
+    }
+  }
+
+  // ==========================================
+  // 15. FUNGSI GABUNG/MULAI TANTANGAN BARU
+  // ==========================================
+  Future<Map<String, dynamic>> joinChallenge(int challengeId) async {
+    SharedPreferences prefs = await SharedPreferences.getInstance();
+    String? token = prefs.getString('token');
+
+    final response = await http.post(
+      Uri.parse('$baseUrl/challenges/$challengeId/join'),
+      headers: {
+        'Authorization': 'Bearer $token',
+        'Accept': 'application/json',
+        'ngrok-skip-browser-warning': 'true',
+      },
+    );
+
+    if (response.statusCode == 200 || response.statusCode == 201) {
+      return json.decode(response.body);
+    } else {
+      final errorData = json.decode(response.body);
+      throw Exception(errorData['message'] ?? 'Gagal memulai tantangan');
+    }
+  }
+
+  // ==========================================
+  // 16. FUNGSI SELESAIKAN MISI HARIAN TANTANGAN
+  // ==========================================
+  Future<Map<String, dynamic>> completeDayChallenge({int? dayNumber, String notes = ''}) async {
+    SharedPreferences prefs = await SharedPreferences.getInstance();
+    String? token = prefs.getString('token');
+
+    final response = await http.post(
+      Uri.parse('$baseUrl/challenges/active/complete-day'),
+      headers: {
+        'Authorization': 'Bearer $token',
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+        'ngrok-skip-browser-warning': 'true',
+      },
+      body: json.encode({
+        if (dayNumber != null) 'day_number': dayNumber,
+        'notes': notes,
+      }),
+    );
+
+    if (response.statusCode == 200) {
+      return json.decode(response.body);
+    } else {
+      final errorData = json.decode(response.body);
+      throw Exception(errorData['message'] ?? 'Gagal menyelesaikan misi tantangan');
+    }
+  }
+
+  // ==========================================
+  // 17. FUNGSI RESET / ABANDON TANTANGAN
+  // ==========================================
+  Future<Map<String, dynamic>> abandonChallenge() async {
+    SharedPreferences prefs = await SharedPreferences.getInstance();
+    String? token = prefs.getString('token');
+
+    final response = await http.post(
+      Uri.parse('$baseUrl/challenges/active/abandon'),
+      headers: {
+        'Authorization': 'Bearer $token',
+        'Accept': 'application/json',
+        'ngrok-skip-browser-warning': 'true',
+      },
+    );
+
+    if (response.statusCode == 200) {
+      return json.decode(response.body);
+    } else {
+      throw Exception('Gagal mereset tantangan');
+    }
+  }
 }
